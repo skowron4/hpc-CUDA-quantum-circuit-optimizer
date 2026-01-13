@@ -9,7 +9,7 @@
 
 #define NUM_QUBITS 5
 #define CENTER_QUBIT 0
-#define MAX_GATES_PER_LAYER 10 // Ograniczenie dla brute force (6! = 720 wątków to mało dla GPU, ale wystarczy dla demo)
+#define MAX_GATES_PER_LAYER 3 // Ograniczenie dla brute force (6! = 720 wątków to mało dla GPU, ale wystarczy dla demo)
 
 enum GateType { SINGLE_QUBIT, TWO_QUBIT };
 struct Gate {
@@ -22,6 +22,11 @@ struct Gate {
 struct Layer {
     int num_gates;
     Gate gates[MAX_GATES_PER_LAYER];
+};
+
+struct Layer2 {
+    int id;
+    std::vector<Gate> gates;
 };
 
 // Struktura do przesyłania wyników z GPU
@@ -43,14 +48,14 @@ std::vector<Gate> generate_circuit(int num_gates) {
         Gate g;
         g.id = i;
         g.type = (type_dist(gen) == 0) ? SINGLE_QUBIT : TWO_QUBIT;
-        g.control = qubit_dist(gen);
+        g.target = qubit_dist(gen);
 
         if (g.type == TWO_QUBIT) {
             do {
-                g.target = qubit_dist(gen);
+                g.control = qubit_dist(gen);
             } while (g.target == g.control);
         } else {
-            g.target = -1;
+            g.control = -1;
         }
         circuit.push_back(g);
     }
@@ -77,6 +82,121 @@ std::vector<Layer> preprocess_layers(const std::vector<Gate>& circuit, int layer
     }
     return layers;
 }
+
+
+std::vector<Layer2> preprocess_layers_ownership(const std::vector<Gate>& circuit) {
+    std::vector<Layer2> layers;
+
+    // Bufor na bramki, które wystąpiły ZANIM dany qubit wziął udział w bramce 2-kubitowej
+    std::vector<Gate> initial_buffer;
+
+    // Mapa: ID Qubita -> Wskaźnik (indeks) do warstwy, która jest jego "właścicielem"
+    // Jeśli qubit nie ma wpisu w mapie, znaczy że jeszcze nie miał bramki 2-kubitowej.
+    std::map<int, int> qubit_owner_layer;
+
+    int layer_counter = 0;
+
+    for (const auto& gate : circuit) {
+        if (gate.type == TWO_QUBIT) {
+            // 1. Tworzymy nową warstwę dla bramki dwu-kubitowej
+            Layer2 new_layer;
+            new_layer.id = layer_counter;
+
+            // 2. Sprawdzamy bufor startowy (czy są tam jakieś zaległe bramki dla tych qubitów)
+            std::vector<Gate> remaining_buffer;
+            for (const auto& buffered_gate : initial_buffer) {
+                if (buffered_gate.target == gate.control || buffered_gate.target == gate.target) {
+                    new_layer.gates.push_back(buffered_gate);
+                } else {
+                    remaining_buffer.push_back(buffered_gate);
+                }
+            }
+            initial_buffer = remaining_buffer; // Aktualizujemy bufor
+
+            // 3. Dodajemy samą bramkę 2-kubitową
+            new_layer.gates.push_back(gate);
+
+            // 4. Zapisujemy warstwę
+            layers.push_back(new_layer);
+
+            // 5. Aktualizujemy mapę właścicieli
+            // Od teraz każda kolejna bramka single na tych qubitach trafi do TEJ warstwy
+            // (dopóki nie powstanie nowsza warstwa na tych samych qubitach)
+            qubit_owner_layer[gate.control] = layer_counter;
+            qubit_owner_layer[gate.target]  = layer_counter;
+
+            layer_counter++;
+        }
+        else { // SINGLE_QUBIT
+            int q = gate.target;
+
+            // Sprawdzamy, czy ten qubit ma już przypisaną warstwę
+            if (qubit_owner_layer.count(q)) {
+                // TAK: Dopisujemy bramkę do instniejącej warstwy (nawet wstecz!)
+                int owner_id = qubit_owner_layer[q];
+                // Uwaga: owner_id to indeks w wektorze layers (zakładając że id rosną sekwencyjnie 0,1,2...)
+                layers[owner_id].gates.push_back(gate);
+            } else {
+                // NIE: Qubit jeszcze nie miał bramki 2-kubitowej -> idzie do bufora
+                initial_buffer.push_back(gate);
+            }
+        }
+    }
+
+    // --- Sprzątanie ---
+    // Jeśli zostały jakieś bramki w buforze (qubity, które NIGDY nie miały bramki 2-kubitowej),
+    // zgodnie z zasadą "dołącz do ostatniej lub pierwszej", doklejamy je.
+    if (!initial_buffer.empty()) {
+        if (!layers.empty()) {
+            // Doklej do ostatniej
+            layers.back().gates.insert(
+                layers.back().gates.end(),
+                initial_buffer.begin(),
+                initial_buffer.end()
+            );
+        } else {
+            // Jeśli nie było żadnych bramek 2Q, stwórz warstwę "zerową"
+            Layer2 l;
+            l.id = 0;
+            l.gates = initial_buffer;
+            layers.push_back(l);
+        }
+    }
+
+    return layers;
+}
+
+
+void print_layers(const std::vector<Layer2>& layers) {
+    std::cout << "\nREZULTAT GRUPOWANIA:\n";
+    std::cout << "========================================\n";
+
+    if (layers.empty()) {
+        std::cout << "Obwód jest pusty lub brak warstw.\n";
+        return;
+    }
+
+    for (const auto& layer : layers) {
+        std::cout << "WARSTWA " << layer.id << ":\n";
+        std::cout << "----------------------------------------\n";
+
+        for (const auto& gate : layer.gates) {
+            std::cout << "  -> BRAMKA [" << gate.type << "] (id:" << gate.id << ")";
+
+            // Wyrównanie tekstu dla estetyki
+            if (gate.type == SINGLE_QUBIT) {
+                std::cout << "\t Typ: SINGLE \t Target: q" << gate.target;
+            } else {
+                std::cout << "\t Typ: TWO    \t Control: q" << gate.control
+                          << " -> Target: q" << gate.target;
+            }
+            std::cout << std::endl;
+        }
+        std::cout << "\n"; // Pusta linia między warstwami
+    }
+    std::cout << "========================================\n";
+}
+
 
 // --- POMOCNICZE FUNKCJE GPU ---
 
@@ -186,13 +306,13 @@ __global__ void evaluate_permutations(
 // --- 4. INTERPRETER I MAIN (CPU) ---
 
 void print_gate(const Gate& g) {
-    if (g.type == SINGLE_QUBIT) std::cout << "U3(" << g.control << ")";
+    if (g.type == SINGLE_QUBIT) std::cout << "U3(" << g.target << ")";
     else std::cout << "TWO_QUBIT(" << g.control << ", " << g.target << ")";
 }
 
 int main() {
     // A. Inicjalizacja
-    int num_gates = 40;
+    int num_gates = 10;
     std::cout << "[CPU] Generowanie obwodu z " << num_gates << " bramkami...\n";
     auto circuit = generate_circuit(num_gates);
 
@@ -205,6 +325,9 @@ int main() {
     int layer_size = 3; // Grupy po 3 bramki dla testu
     auto layers = preprocess_layers(circuit, layer_size);
     std::cout << "[CPU] Podzielono na " << layers.size() << " warstw (chunks).\n";
+
+    auto layers2 = preprocess_layers_ownership(circuit);
+    print_layers(layers2);
 
     // Początkowe mapowanie: logiczny i -> fizyczny i
     int logical_to_physical[NUM_QUBITS];
