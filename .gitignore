@@ -148,6 +148,10 @@ fabric.properties
 # https://plugins.jetbrains.com/plugin/8053-azure-toolkit-for-intellij
 .idea/**/azureSettings.xml
 
+#manualy added
+.idea
+
+
 ### CUDA ###
 *.i
 *.ii
