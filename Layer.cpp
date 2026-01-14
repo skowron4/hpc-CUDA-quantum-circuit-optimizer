@@ -2,7 +2,7 @@
 
 std::string Layer::toString() const {
     std::stringstream ss;
-    ss << "=== WARSTWA " << id << " ===";
+    ss << "=== WARSTWA " << id << " ===(" << target_two_qubit_gate << "," << control_two_qubit_gate << ")";
     if (gates.empty()) {
         ss << " (Pusta)";
     } else {
@@ -38,7 +38,7 @@ std::vector<Layer> Layer::fromCircuit(const std::vector<Gate>& circuit) {
     for (const auto& gate : circuit) {
         if (gate.type == TWO_QUBIT) {
             // 1. Tworzymy nową warstwę
-            Layer new_layer(layer_counter); // Używamy konstruktora
+            Layer new_layer(layer_counter, gate.target, gate.control); // Używamy konstruktora
 
             // 2. Sprawdzamy bufor startowy
             std::vector<Gate> remaining_buffer;
@@ -93,11 +93,42 @@ std::vector<Layer> Layer::fromCircuit(const std::vector<Gate>& circuit) {
             );
         } else {
             // Warstwa zerowa, jeśli brak bramek 2-kubitowych
-            Layer l(0);
+            std::cout << "HALOOOOOOO KARTUS coś niedobrego sie dzieje" << std::endl;
+            Layer l(0,-1,-1);
             l.gates = initial_buffer;
             layers.push_back(l);
         }
     }
 
     return layers;
+}
+
+
+std::vector<int> Layer::getLayerPermutation(const std::vector<Layer>& layers) {
+    std::vector<int> permutation;
+
+    if (layers.size() < 2) {
+        return permutation;
+    }
+
+    for (size_t i = 0; i < layers.size() - 1; ++i) {
+        const Layer& current = layers[i];
+        const Layer& next = layers[i + 1];
+
+        bool hasConflict = false;
+
+        if (current.target_two_qubit_gate == next.target_two_qubit_gate ||
+            current.target_two_qubit_gate == next.control_two_qubit_gate ||
+            current.control_two_qubit_gate == next.target_two_qubit_gate ||
+            current.control_two_qubit_gate == next.control_two_qubit_gate) {
+            hasConflict = true;
+            }
+
+        if (!hasConflict) {
+            permutation.push_back(current.id);
+            i++;
+        }
+    }
+
+    return permutation;
 }

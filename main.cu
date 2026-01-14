@@ -444,6 +444,11 @@
 //         std::cout << layer << std::endl;
 //     }
 //
+//     std::vector<int> perms = Layer::getLayerPermutation(layers);
+//     for (const auto& perm : perms) {
+//         std::cout << perm << std::endl;
+//     }
+//
 //     return 0;
 // }
 
@@ -454,68 +459,97 @@
 
 
 
-
 #include <iostream>
 #include <vector>
+#include "CircuitGenerator.h"
+#include "Layer.h"
 #include <cuda_runtime.h>
 #include <algorithm>
 
-struct Gate {
+
+#define MAX_LAYERS 20
+#define MAX_SWAPS 32
+#define NUM_QUBITS 5
+
+
+struct GPULayer {
     int id;
     int q1;
     int q2;
 };
 
-// Stałe do konfiguracji
-#define MAX_GATES 64
-#define MAX_QUBITS 16
 
+#define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
+inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true) {
+    if (code != cudaSuccess) {
+        fprintf(stderr,"CUDA Error: %s %s %d\n", cudaGetErrorString(code), file, line);
+        if (abort) exit(code);
+    }
+}
 // ----------------------------------------------------------------------
 // KERNEL CUDA
 // ----------------------------------------------------------------------
-__global__ void optimizeCircuit(
-    const Gate* __restrict__ initial_gates,
-    int num_gates,
+__global__ void optimizeLayersShared(
+const GPULayer* __restrict__ initial_layers,
+    int num_layers,
     const int* __restrict__ allowed_swap_indices,
     int num_allowed_swaps,
     int initial_center_qubit,
     int* results_cost
 ) {
-    // 1. Obliczamy ID wątku -> to jest nasza "liczba w bitach" (konfiguracja)
-    int config_mask = blockIdx.x * blockDim.x + threadIdx.x;
+// --- SHARED MEMORY ---
+    __shared__ GPULayer s_initial_layers[MAX_LAYERS];
+    __shared__ int      s_allowed_swaps[MAX_SWAPS];
 
-    // Zakładamy, że sprawdzamy konfiguracje od 0 do 2^num_allowed_swaps
-    if (config_mask >= (1 << num_allowed_swaps)) return;
 
-    // 2. Kopiujemy bramki do pamięci lokalnej (rejestry/L1), aby móc je zamieniać
-    // W prawdziwym kodzie produkcyjnym przy dużych ilościach bramek
-    // użylibyśmy pamięci współdzielonej (shared memory).
-    Gate local_gates[MAX_GATES];
-    for(int i = 0; i < num_gates; ++i) {
-        local_gates[i] = initial_gates[i];
+    int tid = threadIdx.x;
+
+    // Ładowanie warstw do pamięci współdzielonej
+    for (int i = tid; i < num_layers; i += blockDim.x) {
+        s_initial_layers[i] = initial_layers[i];
+    }
+    // Ładowanie indeksów zamian
+    for (int i = tid; i < num_allowed_swaps; i += blockDim.x) {
+        s_allowed_swaps[i] = allowed_swap_indices[i];
     }
 
-    // 3. Aplikujemy zamiany na podstawie bitów w config_mask
-    // Jeśli bit k jest 1, zamieniamy bramkę na pozycji allowed_swap_indices[k] z następną.
+    // BARDZO WAŻNE: Bariera synchronizacyjna.
+    // Musimy czekać, aż wszystkie wątki skończą ładować dane do shared memory,
+    // zanim ktokolwiek zacznie ich używać.
+    __syncthreads();
+
+    // --- LOGIKA PERMUTACJI (Unikalna dla wątku) ---
+    int config_mask = blockIdx.x * blockDim.x + threadIdx.x;
+    if (config_mask >= (1 << num_allowed_swaps)) return;
+
+    // Kopiujemy z Shared do Rejestrów
+    GPULayer local_layers[MAX_LAYERS];
+    for(int i = 0; i < num_layers; ++i) {
+        local_layers[i] = s_initial_layers[i];
+    }
+
+
+    // Aplikacja zamian (Reordering warstw)
     for (int i = 0; i < num_allowed_swaps; ++i) {
         if ((config_mask >> i) & 1) {
-            int idx = allowed_swap_indices[i];
-            if (idx < num_gates - 1) {
-                // Swap gates local_gates[idx] and local_gates[idx+1]
-                Gate temp = local_gates[idx];
-                local_gates[idx] = local_gates[idx+1];
-                local_gates[idx+1] = temp;
+            int idx = s_allowed_swaps[i];
+            if (idx < num_layers - 1) {
+                // Swapujemy całe struktury GPULayer
+                GPULayer temp = local_layers[idx];
+                local_layers[idx] = local_layers[idx+1];
+                local_layers[idx+1] = temp;
             }
         }
     }
 
-    // 4. Symulacja kosztu i optymalizacja lokalna (Look-ahead)
-    int cost = 0; // Liczba SWAPów fizycznych
+    // --- SYMULACJA KOSZTU ---
+    int cost = 0;
     int current_center = initial_center_qubit;
 
-    for (int i = 0; i < num_gates; ++i) {
-        int u = local_gates[i].q1;
-        int v = local_gates[i].q2;
+    for (int i = 0; i < num_layers; ++i) {
+        // Mapowanie pól ze struktury Layer na logikę q1/q2
+        int u = local_layers[i].q1;
+        int v = local_layers[i].q2;
 
         // Sprawdzamy, czy obecny centralny kubit pasuje do bramki
         bool u_is_center = (u == current_center);
@@ -534,9 +568,10 @@ __global__ void optimizeCircuit(
 
             int next_target = -1; // Brak preferencji
             bool end = false;
-            for (int k = i + 1; !end && k < num_gates; ++k) {
-                int next_u = local_gates[k].q1;
-                int next_v = local_gates[k].q2;
+
+            for (int k = i + 1; !end && k < num_layers; ++k) {
+                int next_u = local_layers[k].q1;
+                int next_v = local_layers[k].q2;
 
                 // Sprawdzamy, czy przyszła bramka korzysta z naszych kandydatów (u lub v)
                 bool uses_u = (next_u == u || next_v == u);
@@ -559,7 +594,6 @@ __global__ void optimizeCircuit(
             if (next_target != -1) {
                 current_center = next_target;
             } else {
-                // Jeśli nie ma wskazówki od następnej bramki, wybieramy domyślnie pierwszy (u)
                 current_center = u;
             }
         }
@@ -573,75 +607,109 @@ __global__ void optimizeCircuit(
 // ----------------------------------------------------------------------
 
 int main() {
-    std::vector<Gate> h_gates = {
-        {0, 1, 2}, // b0
-        {1, 4, 3}, // b1
-        {2, 3, 4}, // b2
-        {3, 3, 1}, // b3
-        {4, 0, 2}, // b4
-    };
+    CircuitGenerator gen(NUM_QUBITS);
+    // gen.single(0, "s1");
+    // gen.single(1, "s2");
+    // gen.two(0, 1, "d1");
+    // gen.two(1,2, "d2");
+    // gen.single(0, "s3");
 
-    // Miejsca, gdzie dozwolona jest zamiana (commutable indices)
-    // Np. [0, 3] oznacza, że możemy zamienić (b0, b1) oraz (b3, b4)
-    std::vector<int> h_allowed_swaps = {0, 3};
+    gen.generate_random(MAX_LAYERS);
 
-    int num_gates = h_gates.size();
+    std::vector<Gate> my_circuit = gen.get_circuit();
+
+    std::vector<Layer> host_layers = Layer::fromCircuit(my_circuit);
+
+    std::vector<int> h_allowed_swaps = Layer::getLayerPermutation(host_layers);
+
+    std::cout << "Wygenerowano " << host_layers.size() << " warstw:\n";
+    for (const auto& layer : host_layers) {
+        std::cout << layer << std::endl;
+    }
+
+    for (const auto& perm : h_allowed_swaps) {
+        std::cout << perm << std::endl;
+    }
+
+    int num_layers = host_layers.size();
     int num_swaps = h_allowed_swaps.size();
-    int num_configs = 1 << num_swaps; // 2^2 = 4 konfiguracje (00, 01, 10, 11)
+    int num_configs = 1 << num_swaps;
 
+    // 3. KONWERSJA: Layer (CPU) -> GPULayer (GPU Friendly)
+    std::vector<GPULayer> h_gpu_layers;
+    h_gpu_layers.reserve(num_layers);
 
-    // Alokacja pamięci na GPU
-    Gate* d_gates;
+    for (const auto& layer : host_layers) {
+        GPULayer gl;
+        gl.id = layer.id;
+        gl.q1 = layer.control_two_qubit_gate; // Mapowanie pól
+        gl.q2 = layer.target_two_qubit_gate;  // Mapowanie pól
+        h_gpu_layers.push_back(gl);
+    }
+
+    // 4. Alokacja na GPU
+    GPULayer* d_layers;
     int* d_allowed_swaps;
     int* d_results;
 
-    cudaMalloc(&d_gates, num_gates * sizeof(Gate));
-    cudaMalloc(&d_allowed_swaps, num_swaps * sizeof(int));
-    cudaMalloc(&d_results, num_configs * sizeof(int));
+    gpuErrchk(cudaMalloc(&d_layers, num_layers * sizeof(GPULayer)));
+    gpuErrchk(cudaMalloc(&d_allowed_swaps, num_swaps * sizeof(int)));
+    gpuErrchk(cudaMalloc(&d_results, num_configs * sizeof(int)));
 
-    // Kopiowanie danych
-    cudaMemcpy(d_gates, h_gates.data(), num_gates * sizeof(Gate), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_allowed_swaps, h_allowed_swaps.data(), num_swaps * sizeof(int), cudaMemcpyHostToDevice);
+    // Kopiujemy PRZEKONWERTOWANE struktury
+    gpuErrchk(cudaMemcpy(d_layers, h_gpu_layers.data(), num_layers * sizeof(GPULayer), cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMemcpy(d_allowed_swaps, h_allowed_swaps.data(), num_swaps * sizeof(int), cudaMemcpyHostToDevice));
 
-    // Parametry uruchomienia (1 blok, tyle wątków ile konfiguracji)
-    // W rzeczywistości: <<<(num_configs + 255)/256, 256>>>
-    int initial_center_qubit = 0; // Zakładamy, że na start w centrum jest kubit 0
+    // 5. Uruchomienie
+    int threadsPerBlock = 256;
+    int blocksPerGrid = (num_configs + threadsPerBlock - 1) / threadsPerBlock;
+    int initial_center_qubit = 0;
 
-    optimizeCircuit<<<1, num_configs>>>(
-        d_gates,
-        num_gates,
+    std::cout << "Start kernela dla " << num_layers << " warstw..." << std::endl;
+
+    optimizeLayersShared<<<blocksPerGrid, threadsPerBlock>>>(
+        d_layers,
+        num_layers,
         d_allowed_swaps,
         num_swaps,
         initial_center_qubit,
         d_results
     );
-    cudaDeviceSynchronize();
+    gpuErrchk(cudaDeviceSynchronize());
 
-    // Pobranie wyników
+    // 6. Wyniki
     std::vector<int> h_results(num_configs);
-    cudaMemcpy(h_results.data(), d_results, num_configs * sizeof(int), cudaMemcpyDeviceToHost);
+    gpuErrchk(cudaMemcpy(h_results.data(), d_results, num_configs * sizeof(int), cudaMemcpyDeviceToHost));
 
-    // Wypisanie wyników
-    std::cout << "Analiza kosztow (liczba SWAPow) dla konfiguracji:" << std::endl;
     int best_config = -1;
     int min_cost = 999999;
 
     for (int i = 0; i < num_configs; ++i) {
-        std::cout << "Config " << i << " (bity: ";
-        for(int b=0; b<num_swaps; ++b) std::cout << ((i >> b) & 1);
-        std::cout << "): Koszt = " << h_results[i] << std::endl;
-
         if (h_results[i] < min_cost) {
             min_cost = h_results[i];
             best_config = i;
         }
     }
 
-    std::cout << "\nNajlepsza konfiguracja: " << best_config
-              << " z kosztem: " << min_cost << std::endl;
+    std::cout << "Najlepsza konfiguracja: " << best_config << " Koszt: " << min_cost << std::endl;
 
-    // Sprzątanie
-    cudaFree(d_gates);
+    // Odtworzenie najlepszego ułożenia (na CPU, żeby zobaczyć co wyszło)
+    std::cout << "Kolejnosc ID warstw w najlepszym rozwiazaniu: ";
+    std::vector<GPULayer> final_layers = h_gpu_layers;
+
+    // Aplikujemy zamiany lokalnie na CPU żeby wypisać wynik
+    for (int i = 0; i < num_swaps; ++i) {
+        if ((best_config >> i) & 1) {
+            int idx = h_allowed_swaps[i];
+            if (idx < num_layers - 1) {
+                std::swap(final_layers[idx], final_layers[idx+1]);
+            }
+        }
+    }
+    for(const auto& l : final_layers) std::cout << l.id << " ";
+    std::cout << std::endl;
+
+    cudaFree(d_layers);
     cudaFree(d_allowed_swaps);
     cudaFree(d_results);
 
