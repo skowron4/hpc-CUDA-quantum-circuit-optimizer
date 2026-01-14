@@ -572,7 +572,6 @@ __global__ void optimizeCircuit(
 // HOST (CPU)
 // ----------------------------------------------------------------------
 
-//TODO naprawic patrzenie w glab lokalna optymalizacja (jak sa identyczne bramki to ptrzec dlaej) przyklad         {1, 4, 3},{2, 3, 4},{3, 3, 1}
 int main() {
     std::vector<Gate> h_gates = {
         {0, 1, 2}, // b0
