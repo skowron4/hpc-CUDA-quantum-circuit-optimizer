@@ -1,0 +1,41 @@
+#ifndef CIRCUITGENERATOR_H
+#define CIRCUITGENERATOR_H
+
+#pragma once
+#include <vector>
+#include <string>
+#include <random>
+#include "Gate.h"
+
+class CircuitGenerator {
+private:
+    int num_qubits;
+    int next_id;
+    std::vector<Gate> circuit;
+    std::mt19937 rng;
+
+public:
+
+    CircuitGenerator(int qubits);
+
+
+    void single(int target, std::string name = "u3");
+    void two(int control, int target, std::string name = "cx");
+
+
+    void h(int target);
+    void x(int target);
+    void y(int target);
+    void cx(int control, int target);
+
+
+    void generate_random(int num_gates, double prob_two_qubit = 0.4);
+
+
+    std::vector<Gate> get_circuit() const;
+    void clear();
+};
+
+
+
+#endif //CIRCUITGENERATOR_H
