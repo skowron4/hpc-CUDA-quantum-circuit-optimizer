@@ -12,8 +12,8 @@ add_executable(obliczenia
         CircuitGenerator.cpp
         CircuitGenerator.h
         Gate.h
-        Layer.h
-        Layer.cpp
+        Group.h
+        Group.cpp
 )
 
 set_target_properties(obliczenia PROPERTIES
