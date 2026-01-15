@@ -1,4 +1,5 @@
 #include "Group.h"
+#include <algorithm>
 
 std::string Group::toString() const {
     std::stringstream ss;
@@ -131,4 +132,57 @@ std::vector<int> Group::getGroupPermutation(const std::vector<Group>& groups) {
     }
 
     return permutation;
+}
+
+void Group::printGroups(const std::vector<Group>& groups, int num_qubits) {
+    std::cout << "\n=== WIZUALIZACJA PODZIALU NA GRUPY ===\n";
+
+    for (const auto& group : groups) {
+        std::cout << "Grupa ID: " << group.id << "\n";
+
+        std::vector<std::stringstream> lines(num_qubits);
+
+        for (int i = 0; i < num_qubits; ++i) lines[i] << "q" << i << ": ";
+
+        for (const auto& gate : group.gates) {
+            int max_len = 0;
+            for (const auto& ss : lines) {
+                if (ss.str().length() > max_len) max_len = ss.str().length();
+            }
+            for (auto& ss : lines) {
+                while (ss.str().length() < max_len) ss << "-";
+            }
+
+            if (gate.type == SINGLE_QUBIT) {
+                for (int i = 0; i < num_qubits; ++i) {
+                    if (i == gate.target) {
+                        std::string g_name = gate.name;
+                        std::transform(g_name.begin(), g_name.end(), g_name.begin(), ::toupper);
+                        lines[i] << "--[" << g_name << "]--";
+                    } else {
+                        int gap = gate.name.length() + 6;
+                        for (int j = 0; j < gap; ++j) lines[i] << "-";
+                    }
+                }
+            }
+            else if (gate.type == TWO_QUBIT) {
+                int c = gate.control;
+                int t = gate.target;
+                int min_q = std::min(c, t);
+                int max_q = std::max(c, t);
+
+                for (int i = 0; i < num_qubits; ++i) {
+                    if (i == c) lines[i] << "---*---";
+                    else if (i == t) lines[i] << "--(+)--";
+                    else if (i > min_q && i < max_q) lines[i] << "---|---";
+                    else lines[i] << "-------";
+                }
+            }
+        }
+
+        for (int i = 0; i < num_qubits; ++i) {
+            std::cout << lines[i].str() << "\n";
+        }
+        std::cout << "----------------------------------------\n";
+    }
 }

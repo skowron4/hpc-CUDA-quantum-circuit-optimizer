@@ -15,7 +15,6 @@ private:
     std::mt19937 rng;
 
 public:
-
     CircuitGenerator(int qubits);
 
 
@@ -34,6 +33,8 @@ public:
 
     std::vector<Gate> get_circuit() const;
     void clear();
+
+    void print() const;
 };
 
 

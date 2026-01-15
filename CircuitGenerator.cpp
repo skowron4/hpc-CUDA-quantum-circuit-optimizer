@@ -1,10 +1,14 @@
 #include "CircuitGenerator.h"
 #include <iostream>
+#include <sstream>
+#include <algorithm>
 #include <ctime>
+
 
 // Konstruktor
 CircuitGenerator::CircuitGenerator(int qubits) : num_qubits(qubits), next_id(1) {
-    rng.seed(std::time(nullptr));
+//    rng.seed(std::time(nullptr));
+    rng.seed(42);
 }
 
 // Podstawowa bramka 1-kubitowa
@@ -67,4 +71,61 @@ std::vector<Gate> CircuitGenerator::get_circuit() const {
 void CircuitGenerator::clear() {
     circuit.clear();
     next_id = 1;
+}
+
+void CircuitGenerator::print() const {
+    if (circuit.empty()) {
+        std::cout << "Obwód jest pusty!!\n";
+        return;
+    }
+
+    std::vector<std::stringstream> lines(num_qubits);
+
+    for (int i = 0; i < num_qubits; ++i) lines[i] << "q" << i << ": ";
+
+    for (const auto& gate : circuit) {
+        int max_len = 0;
+        for (const auto& ss : lines) {
+            int len = ss.str().length();
+            if (len > max_len) max_len = len;
+        }
+
+        for (auto& ss : lines) {
+            while (ss.str().length() < max_len) ss << "-";
+        }
+
+        if (gate.type == SINGLE_QUBIT) {
+            for (int i = 0; i < num_qubits; ++i) {
+                if (i == gate.target) {
+                    std::string g_name = gate.name;
+                    std::transform(g_name.begin(), g_name.end(), g_name.begin(), ::toupper);
+                    lines[i] << "-[" << g_name << "]-";
+                }
+                else {
+                    int gap = gate.name.length() + 4;
+                    for (int j = 0; j < gap; ++j) lines[i] << "-";
+                }
+            }
+        }
+        else if (gate.type == TWO_QUBIT) {
+            int c = gate.control;
+            int t = gate.target;
+            int min_q = std::min(c, t);
+            int max_q = std::max(c, t);
+
+            for (int i = 0; i < num_qubits; ++i) {
+                if (i == c) lines[i] << "--o--";
+                else if (i == t) lines[i] << "-(+)-";
+                else if (i > min_q && i < max_q) lines[i] << "--|--";
+                else lines[i] << "-----";
+            }
+        }
+    }
+
+    std::cout << "\n=== WIZUALIZACJA OBWODU ===\n";
+    for (int i = 0; i < num_qubits; ++i) {
+        std::cout << lines[i].str() << "\n";
+    }
+
+    std::cout << "============================\n";
 }

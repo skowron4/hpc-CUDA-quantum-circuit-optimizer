@@ -4,6 +4,8 @@
 #include "Group.h"
 #include <cuda_runtime.h>
 #include <algorithm>
+#include <windows.h>
+#include <fstream>
 
 
 #define MAX_GATES 20
@@ -137,11 +139,72 @@ const GPUGroup* __restrict__ initial_groups,
     results_cost[config_mask] = cost;
 }
 
+void printWithSwaps(const std::vector<Gate>& circuit, int num_qubits) {
+    if (circuit.empty()) return;
+
+    std::vector<std::stringstream> lines(num_qubits);
+    for (int i = 0; i < num_qubits; ++i) lines[i] << "q" << i << ": ";
+
+    for (const auto& gate : circuit) {
+        int max_len = 0;
+        for (const auto& ss : lines)
+            if ((int)ss.str().length() > max_len) max_len = (int)ss.str().length();
+
+        for (auto& ss : lines)
+            while ((int)ss.str().length() < max_len) ss << "-";
+
+        if (gate.type == SINGLE_QUBIT) {
+            for (int i = 0; i < num_qubits; ++i) {
+                if (i == gate.target) {
+                    std::string g_name = gate.name;
+                    if(g_name.length() > 3) g_name = g_name.substr(0, 3);
+                    std::transform(g_name.begin(), g_name.end(), g_name.begin(), ::toupper);
+                    lines[i] << "-[" << g_name << "]-";
+                } else {
+                    lines[i] << "-----";
+                }
+            }
+        }
+        else if (gate.type == TWO_QUBIT) {
+            int c = gate.control;
+            int t = gate.target;
+            int min_q = min(c, t);
+            int max_q = max(c, t);
+            bool is_swap = (gate.name == "SWAP");
+
+            for (int i = 0; i < num_qubits; ++i) {
+                if (i > min_q && i < max_q) {
+                    lines[i] << "--|--";
+                }
+                else if (is_swap && (i == c || i == t)) {
+                    lines[i] << "--x--"; // SWAP
+                }
+                else if (!is_swap && i == c) {
+                    lines[i] << "--o--"; // Control
+                }
+                else if (!is_swap && i == t) {
+                    lines[i] << "-(+)-"; // Target
+                }
+                else {
+                    lines[i] << "-----";
+                }
+            }
+        }
+    }
+
+    std::cout << "\n=== FINALNY OBWOD Z BRAMKAMI SWAP ===\n";
+    for (int i = 0; i < num_qubits; ++i) {
+        std::cout << lines[i].str() << "\n";
+    }
+    std::cout << "=====================================\n";
+}
+
 // ----------------------------------------------------------------------
 // HOST (CPU)
 // ----------------------------------------------------------------------
 
 int main() {
+//    SetConsoleOutputCP(CP_UTF8);
     CircuitGenerator gen(NUM_QUBITS);
     // gen.single(0, "s1");
     // gen.single(1, "s2");
@@ -157,14 +220,12 @@ int main() {
 
     std::vector<int> h_allowed_swaps = Group::getGroupPermutation(host_group);
 
-    std::cout << "Wygenerowano " << host_group.size() << " warstw:\n";
-    for (const auto& group : host_group) {
-        std::cout << group << std::endl;
-    }
+    gen.print();
+    Group::printGroups(host_group, NUM_QUBITS);
 
-    for (const auto& perm : h_allowed_swaps) {
-        std::cout << perm << std::endl;
-    }
+//    for (const auto& perm : h_allowed_swaps) {
+//        std::cout << perm << std::endl;
+//    }
 
     int num_groups = (int) host_group.size();
     int num_swaps = (int) h_allowed_swaps.size();
@@ -246,6 +307,73 @@ int main() {
     cudaFree(d_groups);
     cudaFree(d_allowed_swaps);
     cudaFree(d_results);
+
+    std::vector<Group> final_host_groups = host_group;
+
+    for (int i = 0; i < num_swaps; ++i) {
+        if ((best_config >> i) & 1) {
+            int idx = h_allowed_swaps[i];
+            if (idx < num_groups - 1)
+                std::swap(final_host_groups[idx], final_host_groups[idx+1]);
+        }
+    }
+
+    std::cout << "Kolejnosc ID warstw: ";
+    for(const auto& g : final_host_groups) std::cout << g.id << " ";
+    std::cout << "\n";
+
+    std::vector<Gate> full_circuit_with_swaps;
+    int current_center = initial_center_qubit;
+
+    for (int i = 0; i < num_groups; ++i) {
+        int q1 = final_host_groups[i].control_two_qubit_gate;
+        int q2 = final_host_groups[i].target_two_qubit_gate;
+
+        bool needed_swap = false;
+        int chosen_swap_target;
+
+        if (!(q1 == current_center || q2 == current_center)) {
+            needed_swap = true;
+
+            int next_target = -1;
+            bool end = false;
+
+            for (int j = i + 1; !end && j < num_groups; ++j) {
+                int next_q1 = final_host_groups[j].control_two_qubit_gate;
+                int next_q2 = final_host_groups[j].target_two_qubit_gate;
+
+                bool uses_q1 = (next_q1 == q1 || next_q2 == q1);
+                bool uses_q2 = (next_q1 == q2 || next_q2 == q2);
+
+                if (uses_q1 && !uses_q2) { next_target = q1; end = true; }
+                if (uses_q2 && !uses_q1) { next_target = q2; end = true; }
+            }
+
+            if (next_target != -1) chosen_swap_target = next_target;
+            else chosen_swap_target = q1;
+        }
+
+        if (needed_swap) {
+            Gate swap_gate;
+            swap_gate.type = TWO_QUBIT;
+            swap_gate.name = "SWAP";
+            swap_gate.control = current_center;
+            swap_gate.target = chosen_swap_target;
+
+            full_circuit_with_swaps.push_back(swap_gate);
+
+            current_center = chosen_swap_target;
+        }
+
+        full_circuit_with_swaps.insert(
+                full_circuit_with_swaps.end(),
+                final_host_groups[i].gates.begin(),
+                final_host_groups[i].gates.end()
+        );
+    }
+
+    printWithSwaps(full_circuit_with_swaps, NUM_QUBITS);
+    return 0;
 
     return 0;
 }

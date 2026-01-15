@@ -25,6 +25,8 @@ struct Group {
 
     static std::vector<int> getGroupPermutation(const std::vector<Group>& groups);
 
+
+    static void printGroups(const std::vector<Group>& groups, int num_qubits);
 };
 
 #endif //LAYER_H
