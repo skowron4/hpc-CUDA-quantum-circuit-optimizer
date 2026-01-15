@@ -7,8 +7,11 @@
 
 // Konstruktor
 CircuitGenerator::CircuitGenerator(int qubits) : num_qubits(qubits), next_id(1) {
-//    rng.seed(std::time(nullptr));
-    rng.seed(42);
+    rng.seed(std::time(nullptr));
+}
+
+CircuitGenerator::CircuitGenerator(int qubits, int seed) : num_qubits(qubits), next_id(1) {
+    rng.seed(seed);
 }
 
 // Podstawowa bramka 1-kubitowa

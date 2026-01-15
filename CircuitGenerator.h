@@ -16,6 +16,8 @@ private:
 
 public:
     CircuitGenerator(int qubits);
+    CircuitGenerator(int qubits, int seed);
+
 
 
     void single(int target, std::string name = "u3");

@@ -8,8 +8,8 @@
 #include <fstream>
 
 
-#define MAX_GATES 20
-#define MAX_SWAPS 16
+#define MAX_GATES 80
+#define MAX_SWAPS 31
 #define NUM_QUBITS 5
 
 
@@ -148,7 +148,7 @@ void printWithSwaps(const std::vector<Gate>& circuit, int num_qubits) {
     for (const auto& gate : circuit) {
         int max_len = 0;
         for (const auto& ss : lines)
-            if ((int)ss.str().length() > max_len) max_len = (int)ss.str().length();
+            if (ss.str().length() > max_len) max_len = ss.str().length();
 
         for (auto& ss : lines)
             while ((int)ss.str().length() < max_len) ss << "-";
@@ -204,15 +204,14 @@ void printWithSwaps(const std::vector<Gate>& circuit, int num_qubits) {
 // ----------------------------------------------------------------------
 
 int main() {
-//    SetConsoleOutputCP(CP_UTF8);
-    CircuitGenerator gen(NUM_QUBITS);
+    CircuitGenerator gen(NUM_QUBITS,5);
     // gen.single(0, "s1");
     // gen.single(1, "s2");
     // gen.two(0, 1, "d1");
     // gen.two(1,2, "d2");
     // gen.single(0, "s3");
 
-    gen.generate_random(MAX_GATES);
+    gen.generate_random(MAX_GATES, 1);
 
     std::vector<Gate> my_circuit = gen.get_circuit();
 
@@ -223,12 +222,14 @@ int main() {
     gen.print();
     Group::printGroups(host_group, NUM_QUBITS);
 
-//    for (const auto& perm : h_allowed_swaps) {
-//        std::cout << perm << std::endl;
-//    }
+    std::cout << "Dozwolone permutacje grup ("<< h_allowed_swaps.size() << "):" << std::endl;
+    for (const auto &perm: h_allowed_swaps) {
+        std::cout << perm << " ";
+    }
+    std::cout << std::endl;
 
-    int num_groups = (int) host_group.size();
-    int num_swaps = (int) h_allowed_swaps.size();
+    int num_groups = host_group.size();
+    int num_swaps = h_allowed_swaps.size();
     int num_configs = 1 << num_swaps;
 
     // 3. KONWERSJA: Group (CPU) -> GPUGroup (GPU Friendly)
@@ -373,7 +374,5 @@ int main() {
     }
 
     printWithSwaps(full_circuit_with_swaps, NUM_QUBITS);
-    return 0;
-
     return 0;
 }

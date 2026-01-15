@@ -9,6 +9,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_executable(obliczenia
         main.cu
+#        SingleCore.cpp
         CircuitGenerator.cpp
         CircuitGenerator.h
         Gate.h
