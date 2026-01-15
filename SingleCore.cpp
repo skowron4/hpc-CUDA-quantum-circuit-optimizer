@@ -8,7 +8,7 @@
 
 
 #define MAX_GATES 80
-#define MAX_SWAPS 31
+#define MAX_SWAPS 40
 #define NUM_QUBITS 5
 
 void printWithSwaps(const std::vector<Gate>& circuit, int num_qubits) {
@@ -73,7 +73,7 @@ void printWithSwaps(const std::vector<Gate>& circuit, int num_qubits) {
 
 
 int calculateCost(
-    std::vector<Group> local_groups,
+    std::vector<Group> &local_groups,
     const std::vector<int>& allowed_swaps,
     int config_mask,
     int initial_center_qubit
@@ -135,14 +135,14 @@ int calculateCost(
 
 int main() {
 //    SetConsoleOutputCP(CP_UTF8);
-    CircuitGenerator gen(NUM_QUBITS,6);
+    CircuitGenerator gen(NUM_QUBITS,24);
     // gen.single(0, "s1");
     // gen.single(1, "s2");
     // gen.two(0, 1, "d1");
     // gen.two(1,2, "d2");
     // gen.single(0, "s3");
 
-    gen.generate_random(MAX_GATES, 1);
+    gen.generate_random(MAX_GATES, 0.5);
 
     std::vector<Gate> my_circuit = gen.get_circuit();
 
@@ -152,6 +152,12 @@ int main() {
 
     gen.print();
     Group::printGroups(host_group, NUM_QUBITS);
+    const int hard_limit_swaps = 31;
+
+    if (allowed_swaps.size() > hard_limit_swaps) {
+        std::cout << "!!! UWAGA: Zbyt duzo kombinacji (>" << hard_limit_swaps << ") !!!\n";
+        exit(1);
+    }
 
     std::cout << "Dozwolone permutacje grup ("<< allowed_swaps.size() << "):" << std::endl;
     for (const auto &perm: allowed_swaps) {
@@ -173,8 +179,11 @@ int main() {
     int min_cost = INT_MAX;
     int best_config = -1;
 
+    std::vector<Group> temp_group;
+
     for (int mask = 0; mask < num_configs; ++mask) {
         // Obliczamy koszt dla danej permutacji (przekazujemy kopię wektora grup przez wartość w funkcji)
+        std::copy(host_group.begin(), host_group.end(), host_group.end());
         int cost = calculateCost(host_group, allowed_swaps, mask, initial_center_qubit);
 
         if (cost < min_cost) {

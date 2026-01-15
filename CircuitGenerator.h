@@ -30,7 +30,7 @@ public:
     void cx(int control, int target);
 
 
-    void generate_random(int num_gates, double prob_two_qubit = 0.4);
+    void generate_random(int target_two_qubit_count, double prob_single_qubit);
 
 
     std::vector<Gate> get_circuit() const;

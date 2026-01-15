@@ -43,24 +43,39 @@ void CircuitGenerator::y(int target) { single(target, "y"); }
 void CircuitGenerator::cx(int control, int target) { two(control, target, "cx"); }
 
 // Implementacja generatora losowego
-void CircuitGenerator::generate_random(int num_gates, double prob_two_qubit) {
-    std::uniform_real_distribution<> dist_type(0.0, 1.0);
+void CircuitGenerator::generate_random(int target_two_qubit_count, double prob_single_qubit) {
+    std::uniform_real_distribution<> dist_prob(0.0, 1.0);
     std::uniform_int_distribution<> dist_qubit(0, num_qubits - 1);
 
-    for (int i = 0; i < num_gates; ++i) {
-        bool is_two_qubit = dist_type(rng) < prob_two_qubit;
+    int current_two_qubit_count = 0;
 
-        if (is_two_qubit && num_qubits > 1) {
-            int c = dist_qubit(rng);
-            int t = dist_qubit(rng);
-            while (t == c) { t = dist_qubit(rng); }
-            cx(c, t);
-        } else {
+    if (prob_single_qubit >= 1.0) {
+        std::cerr << "[Gen Error] Prawdopodobienstwo bramki 1-kubitowej nie moze byc 1.0 (nieskonczona petla)!" << std::endl;
+        return;
+    }
+
+    while (current_two_qubit_count < target_two_qubit_count) {
+
+        bool is_single_qubit = dist_prob(rng) < prob_single_qubit;
+
+        if (is_single_qubit) {
             int q = dist_qubit(rng);
-            double type = dist_type(rng);
+            double type = dist_prob(rng);
+
             if (type < 0.33) h(q);
             else if (type < 0.66) x(q);
             else y(q);
+        }
+        else {
+            if (num_qubits > 1) {
+                int c = dist_qubit(rng);
+                int t = dist_qubit(rng);
+                while (t == c) { t = dist_qubit(rng); }
+
+                cx(c, t);
+
+                current_two_qubit_count++;
+            } else break;
         }
     }
 }

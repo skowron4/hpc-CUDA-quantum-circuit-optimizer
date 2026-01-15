@@ -6,18 +6,12 @@
 #include <algorithm>
 #include <windows.h>
 #include <fstream>
+#include <chrono>
 
 
-#define MAX_GATES 80
-#define MAX_SWAPS 31
+#define MAX_GATES 125
+#define MAX_SWAPS 63
 #define NUM_QUBITS 5
-
-
-struct GPUGroup {
-    int id;
-    int q1;
-    int q2;
-};
 
 
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
@@ -31,112 +25,134 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=t
 // KERNEL CUDA
 // ----------------------------------------------------------------------
 __global__ void optimizeGroupsShared(
-const GPUGroup* __restrict__ initial_groups,
+    const int* __restrict__ q1_array,
+    const int* __restrict__ q2_array,
     int num_group,
     const int* __restrict__ allowed_swap_indices,
     int num_allowed_swaps,
     int initial_center_qubit,
-    int* results_cost
+    int* results_cost,
+    unsigned long long* best_results_indices,
+    unsigned long long total_configs_to_check
 ) {
 // --- SHARED MEMORY ---
-    __shared__ GPUGroup s_initial_group[MAX_GATES];
-    __shared__ int      s_allowed_swaps[MAX_SWAPS];
+    __shared__ int s_min_cost[256];
+    __shared__ unsigned long long s_best_idx[256];
+    __shared__ int s_q1[MAX_GATES];
+    __shared__ int s_q2[MAX_GATES];
+    __shared__ int s_allowed_swaps[MAX_SWAPS];
 
-
-    int tid = threadIdx.x;
+    int t_id = threadIdx.x;
+    s_min_cost[t_id] = INT_MAX;
+    s_best_idx[t_id] = 0;
+    unsigned long long id = (unsigned long long) blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned long long stride = (unsigned long long)gridDim.x * blockDim.x;
+    int local_min_cost = INT_MAX;
+    unsigned long long local_best_config = 0;
 
     // Ładowanie grup do pamięci współdzielonej
-    for (int i = tid; i < num_group; i += blockDim.x) {
-        s_initial_group[i] = initial_groups[i];
+    for (int i = t_id; i < num_group; i += blockDim.x) {
+        s_q1[i] = q1_array[i];
+        s_q2[i] = q2_array[i];
     }
     // Ładowanie indeksów zamian
-    for (int i = tid; i < num_allowed_swaps; i += blockDim.x) {
-        s_allowed_swaps[i] = allowed_swap_indices[i];
-    }
+    for (int i = t_id; i < num_allowed_swaps; i += blockDim.x) s_allowed_swaps[i] = allowed_swap_indices[i];
 
     // BARDZO WAŻNE: Bariera synchronizacyjna.
     // Musimy czekać, aż wszystkie wątki skończą ładować dane do shared memory,
     // zanim ktokolwiek zacznie ich używać.
     __syncthreads();
 
-    // --- LOGIKA PERMUTACJI (Unikalna dla wątku) ---
-    int config_mask = blockIdx.x * blockDim.x + threadIdx.x;
-    if (config_mask >= (1 << num_allowed_swaps)) return;
-
-    // Kopiujemy z Shared do Rejestrów
-    GPUGroup local_groups[MAX_GATES];
-    for(int i = 0; i < num_group; ++i) {
-        local_groups[i] = s_initial_group[i];
-    }
-
-
-    // Aplikacja zamian (Reordering warstw)
-    for (int i = 0; i < num_allowed_swaps; ++i) {
-        if ((config_mask >> i) & 1) {
-            int idx = s_allowed_swaps[i];
-            if (idx < num_group - 1) {
-                // Swapujemy całe struktury GPUGroup
-                GPUGroup temp = local_groups[idx];
-                local_groups[idx] = local_groups[idx + 1];
-                local_groups[idx + 1] = temp;
-            }
-        }
-    }
-
     // --- SYMULACJA KOSZTU ---
-    int cost = 0;
-    int current_center = initial_center_qubit;
+    int cost = INT_MAX;
 
-    for (int i = 0; i < num_group; ++i) {
-        // Mapowanie pól ze struktury Group na logikę q1/q2
-        int q1 = local_groups[i].q1;
-        int q2 = local_groups[i].q2;
+    for (unsigned long long config_mask = id; config_mask < total_configs_to_check; config_mask += stride) {
+        int local_q1[MAX_GATES];
+        int local_q2[MAX_GATES];
 
-        // Sprawdzamy, czy obecny centralny kubit pasuje do bramki
-        bool q1_is_center = (q1 == current_center);
-        bool q2_is_center = (q2 == current_center);
+        for (int i = 0; i < num_group; ++i) {
+            local_q1[i] = s_q1[i];
+            local_q2[i] = s_q2[i];
+        }
 
-        if (q1_is_center || q2_is_center) continue;// Wszystko OK, bramka wykonalna (koszt CNOT/Gate pomijamy, liczymy tylko narzut SWAP)
-        else {
-            // Żaden z kubitów bramki nie jest w centrum. Musimy wykonać SWAP.
-            // Koszt wstawienia nowego kubitu do centrum.
-            cost++;
+        for (int i = 0; i < num_allowed_swaps; ++i) {
+            if ((config_mask >> i) & 1) {
+                int idx = s_allowed_swaps[i];
+                if (idx < num_group - 1) {
+                    int temp_q1 = local_q1[idx];
+                    int temp_q2 = local_q2[idx];
 
-            // LOGIKA HEURYSTYCZNA (Look-ahead):
-            // Musimy wstawić 'q1' albo 'q2' do centrum. Który wybrać?
-            // Patrzymy na NASTĘPNĄ bramkę (i+1).
+                    local_q1[idx] = local_q1[idx + 1];
+                    local_q2[idx] = local_q2[idx + 1];
 
-            int next_target = -1; // Brak preferencji
-            bool end = false;
-
-            for (int j = i + 1; !end && j < num_group; ++j) {
-                int next_q1 = local_groups[j].q1;
-                int next_q2 = local_groups[j].q2;
-
-                // Sprawdzamy, czy przyszła bramka korzysta z naszych kandydatów (q1 lub q2)
-                bool uses_q1 = (next_q1 == q1 || next_q2 == q1);
-                bool uses_q2 = (next_q1 == q2 || next_q2 == q2);
-
-                // Logika decyzji:
-                if (uses_q1 && !uses_q2) {
-                    // 'q1' jest potrzebny wcześniej niż 'q2' -> wybieramy 'q1'
-                    next_target = q1;
-                    end = true;
-                }
-                if (uses_q2 && !uses_q1) {
-                    // 'q2' jest potrzebny wcześniej niż 'q1' -> wybieramy 'q2'
-                    next_target = q2;
-                    end = true;
+                    local_q1[idx + 1] = temp_q1;
+                    local_q2[idx + 1] = temp_q2;
                 }
             }
+        }
 
-            // Decyzja
-            if (next_target != -1) current_center = next_target;
-            else current_center = q1;
+        cost = 0;
+        int current_center = initial_center_qubit;
+        int q1, q2;
+        bool q1_is_center, q2_is_center;
+
+        for (int i = 0; i < num_group; ++i) {
+            q1 = local_q1[i];
+            q2 = local_q2[i];
+            q1_is_center = (q1 != current_center);
+            q2_is_center = (q2 != current_center);
+
+            if (q1_is_center && q2_is_center) {
+                int next_target = -1;
+                bool end = false;
+
+                int next_q1, next_q2;
+                bool uses_q1, uses_q2;
+
+                for (int j = 0; !end && j < num_group; ++j) {
+                    next_q1 = local_q1[j];
+                    next_q2 = local_q2[j];
+                    uses_q1 = (next_q1 == q1 || next_q2 == q1);
+                    uses_q2 = (next_q1 == q2 || next_q2 == q2);
+
+                    if (uses_q1 && !uses_q2) {
+                        next_target = q1;
+                        end = true;
+                    }
+                    if (uses_q2 && !uses_q1) {
+                        next_target = q2;
+                        end = true;
+                    } else current_center = q1;
+                }
+                current_center = (next_target != -1) ? next_target : q1;
+                cost++;
+            }
+        }
+
+        if (cost < local_min_cost) {
+            local_min_cost = cost;
+            local_best_config = config_mask;
         }
     }
+    s_min_cost[t_id] = local_min_cost;
+    s_best_idx[t_id] = local_best_config;
 
-    results_cost[config_mask] = cost;
+    __syncthreads();
+
+    for (unsigned int s = blockDim.x >> 1; s > 0; s >>= 1) {
+        if (t_id < s) {
+            if (s_min_cost[t_id + s] < s_min_cost[t_id]) {
+                s_min_cost[t_id] = s_min_cost[t_id + s];
+                s_best_idx[t_id] = s_best_idx[t_id + s];
+            }
+        }
+        __syncthreads();
+    }
+
+    if (t_id == 0) {
+        results_cost[blockIdx.x] = s_min_cost[t_id];
+        best_results_indices[blockIdx.x] = s_best_idx[t_id];
+    }
 }
 
 void printWithSwaps(const std::vector<Gate>& circuit, int num_qubits) {
@@ -144,9 +160,10 @@ void printWithSwaps(const std::vector<Gate>& circuit, int num_qubits) {
 
     std::vector<std::stringstream> lines(num_qubits);
     for (int i = 0; i < num_qubits; ++i) lines[i] << "q" << i << ": ";
+    int max_len;
 
     for (const auto& gate : circuit) {
-        int max_len = 0;
+        max_len = 0;
         for (const auto& ss : lines)
             if (ss.str().length() > max_len) max_len = ss.str().length();
 
@@ -199,115 +216,150 @@ void printWithSwaps(const std::vector<Gate>& circuit, int num_qubits) {
     std::cout << "=====================================\n";
 }
 
+__global__ void findGlobalBest(
+        const int *__restrict__ block_costs,
+        const unsigned long long *__restrict__ block_indices,
+        int num_blocks,
+        int *final_cost,
+        unsigned long long *final_index
+) {
+    __shared__ int s_min_cost[1024];
+    __shared__ unsigned long long s_best_idx[1024];
+
+    int t_id = threadIdx.x;
+    int local_min = INT_MAX;
+    unsigned long long local_idx = 0;
+
+    for (int i = t_id; i < num_blocks; i += blockDim.x) {
+        int val = block_costs[i];
+        if (val < local_min) {
+            local_min = val;
+            local_idx = block_indices[i];
+        }
+    }
+
+    s_min_cost[t_id] = local_min;
+    s_best_idx[t_id] = local_idx;
+    __syncthreads();
+
+    for (unsigned int s = blockDim.x >> 1; s > 0; s >>= 1) {
+        if (t_id < s && s_min_cost[t_id + s] < s_min_cost[t_id]) {
+            s_min_cost[t_id] = s_min_cost[t_id + s];
+            s_best_idx[t_id] = s_best_idx[t_id + s];
+        }
+        __syncthreads();
+    }
+
+    if (t_id == 0) {
+        *final_cost = s_min_cost[0];
+        *final_index = s_best_idx[0];
+    }
+}
+
 // ----------------------------------------------------------------------
 // HOST (CPU)
 // ----------------------------------------------------------------------
 
 int main() {
-    CircuitGenerator gen(NUM_QUBITS,5);
-    // gen.single(0, "s1");
-    // gen.single(1, "s2");
-    // gen.two(0, 1, "d1");
-    // gen.two(1,2, "d2");
-    // gen.single(0, "s3");
-
-    gen.generate_random(MAX_GATES, 1);
+    CircuitGenerator gen(NUM_QUBITS, 24);
+    gen.generate_random(MAX_GATES, 0.5);
 
     std::vector<Gate> my_circuit = gen.get_circuit();
-
     std::vector<Group> host_group = Group::fromCircuit(my_circuit);
-
     std::vector<int> h_allowed_swaps = Group::getGroupPermutation(host_group);
 
     gen.print();
     Group::printGroups(host_group, NUM_QUBITS);
+    const int hard_limit_swaps = 60;
 
-    std::cout << "Dozwolone permutacje grup ("<< h_allowed_swaps.size() << "):" << std::endl;
-    for (const auto &perm: h_allowed_swaps) {
-        std::cout << perm << " ";
+    if (h_allowed_swaps.size() > hard_limit_swaps) {
+        std::cout << "!!! UWAGA: Zbyt duzo kombinacji (>" << hard_limit_swaps << ") !!!\n";
+        exit(1);
     }
-    std::cout << std::endl;
+
+    std::cout << "Dozwolone permutacje grup ("<< h_allowed_swaps.size() << "):\n";
+    for (const auto &perm: h_allowed_swaps) std::cout << perm << " ";
+    std::cout << "\n";
 
     int num_groups = host_group.size();
     int num_swaps = h_allowed_swaps.size();
-    int num_configs = 1 << num_swaps;
+
+    unsigned long long num_configs = 1ULL << num_swaps;
 
     // 3. KONWERSJA: Group (CPU) -> GPUGroup (GPU Friendly)
-    std::vector<GPUGroup> h_gpu_groups;
-    h_gpu_groups.reserve(num_groups);
+    std::vector<int> h_q1(num_groups);
+    std::vector<int> h_q2(num_groups);
 
-    for (const auto& group : host_group) {
-        GPUGroup gl;
-        gl.id = group.id;
-        gl.q1 = group.control_two_qubit_gate; // Mapowanie pól
-        gl.q2 = group.target_two_qubit_gate;  // Mapowanie pól
-        h_gpu_groups.push_back(gl);
+    for(int i=0; i<num_groups; ++i) {
+        h_q1[i] = host_group[i].control_two_qubit_gate;
+        h_q2[i] = host_group[i].target_two_qubit_gate;
     }
 
     // 4. Alokacja na GPU
-    GPUGroup* d_groups;
-    int* d_allowed_swaps;
-    int* d_results;
+    int *d_allowed_swaps, *d_results_cost, *d_q1, *d_q2, *d_final_cost;
+    unsigned long long* d_result_indices, *d_final_index;
+    unsigned int threads_per_block = 256, blocks_per_grid = 81920;
 
-    gpuErrchk(cudaMalloc(&d_groups, num_groups * sizeof(GPUGroup)));
-    gpuErrchk(cudaMalloc(&d_allowed_swaps, num_swaps * sizeof(int)));
-    gpuErrchk(cudaMalloc(&d_results, num_configs * sizeof(int)));
+    gpuErrchk(cudaMalloc(&d_q1, num_groups * sizeof(int)))
+    gpuErrchk(cudaMalloc(&d_q2, num_groups * sizeof(int)))
+    gpuErrchk(cudaMalloc(&d_allowed_swaps, num_swaps * sizeof(int)))
 
-    // Kopiujemy PRZEKONWERTOWANE struktury
-    gpuErrchk(cudaMemcpy(d_groups, h_gpu_groups.data(), num_groups * sizeof(GPUGroup), cudaMemcpyHostToDevice));
-    gpuErrchk(cudaMemcpy(d_allowed_swaps, h_allowed_swaps.data(), num_swaps * sizeof(int), cudaMemcpyHostToDevice));
+    // Bufory pośrednie (wyniki z bloków)
+    gpuErrchk(cudaMalloc(&d_results_cost, blocks_per_grid * sizeof(int)))
+    gpuErrchk(cudaMalloc(&d_result_indices, blocks_per_grid * sizeof(unsigned long long)))
+
+    // Bufory końcowe (1 int, 1 long long)
+    gpuErrchk(cudaMalloc(&d_final_cost, sizeof(int)))
+    gpuErrchk(cudaMalloc(&d_final_index, sizeof(unsigned long long)))
+
+    // Kopiowanie danych (SoA)
+    gpuErrchk(cudaMemcpy(d_q1, h_q1.data(), num_groups * sizeof(int), cudaMemcpyHostToDevice))
+    gpuErrchk(cudaMemcpy(d_q2, h_q2.data(), num_groups * sizeof(int), cudaMemcpyHostToDevice))
+    gpuErrchk(cudaMemcpy(d_allowed_swaps, h_allowed_swaps.data(), num_swaps * sizeof(int), cudaMemcpyHostToDevice))
 
     // 5. Uruchomienie
-    int threadsPerBlock = 256;
-    int blocksPerGrid = (num_configs + threadsPerBlock - 1) / threadsPerBlock;
     int initial_center_qubit = 0;
 
     std::cout << "Start kernela dla " << num_groups << " warstw..." << std::endl;
-
-    optimizeGroupsShared<<<blocksPerGrid, threadsPerBlock>>>(
-            d_groups,
+    auto start_time = std::chrono::high_resolution_clock::now();
+    optimizeGroupsShared<<<blocks_per_grid, threads_per_block>>>(
+            d_q1,
+            d_q2,
             num_groups,
             d_allowed_swaps,
             num_swaps,
             initial_center_qubit,
-            d_results
+            d_results_cost,
+            d_result_indices,
+            num_configs
     );
-    gpuErrchk(cudaDeviceSynchronize());
+    findGlobalBest<<<1, 1024>>>(
+            d_results_cost, d_result_indices, blocks_per_grid,
+            d_final_cost, d_final_index
+    );
 
+    gpuErrchk(cudaDeviceSynchronize())
+    auto end_time = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsed = end_time - start_time;
+    gpuErrchk(cudaPeekAtLastError())
+
+    std::cout << "Czas obliczen: " << elapsed.count() << "s\n";
     // 6. Wyniki
-    std::vector<int> h_results(num_configs);
-    gpuErrchk(cudaMemcpy(h_results.data(), d_results, num_configs * sizeof(int), cudaMemcpyDeviceToHost));
+    unsigned long long best_config = 0;
+    int min_cost = INT_MAX;
 
-    int best_config = -1;
-    int min_cost = 999999;
+    gpuErrchk(cudaMemcpy(&min_cost, d_final_cost, sizeof(int), cudaMemcpyDeviceToHost))
+    gpuErrchk(cudaMemcpy(&best_config, d_final_index, sizeof(unsigned long long), cudaMemcpyDeviceToHost))
 
-    for (int i = 0; i < num_configs; ++i) {
-        if (h_results[i] < min_cost) {
-            min_cost = h_results[i];
-            best_config = i;
-        }
-    }
+    std::cout << "Najlepsza konfiguracja  (ID): " << best_config << " Koszt SWAPow: " << min_cost << "\n";
 
-    std::cout << "Najlepsza konfiguracja: " << best_config << " Koszt: " << min_cost << std::endl;
-
-    // Odtworzenie najlepszego ułożenia (na CPU, żeby zobaczyć co wyszło)
-    std::cout << "Kolejnosc ID warstw w najlepszym rozwiazaniu: ";
-    std::vector<GPUGroup> final_layers = h_gpu_groups;
-
-    // Aplikujemy zamiany lokalnie na CPU żeby wypisać wynik
-    for (int i = 0; i < num_swaps; ++i) {
-        if ((best_config >> i) & 1) {
-            int idx = h_allowed_swaps[i];
-            if (idx < num_groups - 1)
-                std::swap(final_layers[idx], final_layers[idx+1]);
-        }
-    }
-    for(const auto& l : final_layers) std::cout << l.id << " ";
-    std::cout << std::endl;
-
-    cudaFree(d_groups);
+    cudaFree(d_q1);
+    cudaFree(d_q2);
     cudaFree(d_allowed_swaps);
-    cudaFree(d_results);
+    cudaFree(d_results_cost);
+    cudaFree(d_result_indices);
+    cudaFree(d_final_cost);
+    cudaFree(d_final_index);
 
     std::vector<Group> final_host_groups = host_group;
 
@@ -315,7 +367,7 @@ int main() {
         if ((best_config >> i) & 1) {
             int idx = h_allowed_swaps[i];
             if (idx < num_groups - 1)
-                std::swap(final_host_groups[idx], final_host_groups[idx+1]);
+                std::swap(final_host_groups[idx], final_host_groups[idx + 1]);
         }
     }
 
@@ -325,13 +377,16 @@ int main() {
 
     std::vector<Gate> full_circuit_with_swaps;
     int current_center = initial_center_qubit;
+    bool needed_swap;
+    int chosen_swap_target;
+    int q1, q2;
 
     for (int i = 0; i < num_groups; ++i) {
-        int q1 = final_host_groups[i].control_two_qubit_gate;
-        int q2 = final_host_groups[i].target_two_qubit_gate;
+        q1 = final_host_groups[i].control_two_qubit_gate;
+        q2 = final_host_groups[i].target_two_qubit_gate;
 
-        bool needed_swap = false;
-        int chosen_swap_target;
+        needed_swap = false;
+        chosen_swap_target = -1;
 
         if (!(q1 == current_center || q2 == current_center)) {
             needed_swap = true;
