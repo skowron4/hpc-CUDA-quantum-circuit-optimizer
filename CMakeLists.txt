@@ -9,12 +9,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_executable(obliczenia
         main.cu
-#        SingleCore.cpp
         CircuitGenerator.cpp
         CircuitGenerator.h
         Gate.h
         Group.h
         Group.cpp
+        CPUAlgorithm.cpp
+        CPUAlgorithm.h
 )
 
 set_target_properties(obliczenia PROPERTIES
