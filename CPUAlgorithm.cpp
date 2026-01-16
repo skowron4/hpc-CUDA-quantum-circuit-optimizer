@@ -6,33 +6,55 @@
 #include <algorithm>
 #include <omp.h>
 #include "CircuitGenerator.h"
+#include <numeric>
 
-int CPUAlgorithm::calculateCost(std::vector<Group> &local_groups,
-                                const std::vector<int>& allowed_swaps,
-                                long long config_mask,
-                                int initial_center_qubit
-                                ) {
+int CPUAlgorithm::calculateCost(
+        std::vector<int>& local_indices,
+        const std::vector<Group>& groups_data,
+        const std::vector<int>& allowed_swaps,
+        long long config_mask,
+        int initial_center_qubit
+) {
     int num_allowed_swaps = (int)allowed_swaps.size();
-    int num_group = (int)local_groups.size();
+    int num_groups = (int)local_indices.size();
 
     for (int i = 0; i < num_allowed_swaps; ++i) {
         if ((config_mask >> i) & 1) {
             int idx = allowed_swaps[i];
-            if (idx < num_group - 1) std::swap(local_groups[idx], local_groups[idx + 1]);
+            if (idx < num_groups - 1) {
+                std::swap(local_indices[idx], local_indices[idx + 1]);
+            }
         }
     }
 
     int cost = 0;
     int current_center = initial_center_qubit;
 
-    for (int i = 0; i < num_group; ++i) {
-        int q1 = local_groups[i].control_two_qubit_gate;
-        int q2 = local_groups[i].target_two_qubit_gate;
+    for (int i = 0; i < num_groups; ++i) {
+        const Group& current_group = groups_data[local_indices[i]];
+
+        int q1 = current_group.control_two_qubit_gate;
+        int q2 = current_group.target_two_qubit_gate;
 
         if (q1 == current_center || q2 == current_center) continue;
 
         cost++;
-        current_center = determineNextCenter(local_groups, i, num_group);
+        int next_target = q1;
+        bool found = false;
+
+        for (int j = i + 1; !found && j < num_groups; ++j) {
+            const Group& future_group = groups_data[local_indices[j]];
+            int nq1 = future_group.control_two_qubit_gate;
+            int nq2 = future_group.target_two_qubit_gate;
+
+            bool u1 = (nq1 == q1 || nq2 == q1);
+            bool u2 = (nq1 == q2 || nq2 == q2);
+
+            if (u1 && !u2) { next_target = q1; found = true; }
+            else if (u2 && !u1) { next_target = q2; found = true; }
+        }
+
+        current_center = next_target;
     }
 
     return cost;
@@ -133,7 +155,7 @@ void CPUAlgorithm::printGroupPerm(std::vector<int> &allowed_swaps) {
     std::cout << "\n";
 }
 
-CPUAlgorithm::OptimizationData CPUAlgorithm::prepareData(int num_qubits, int max_gates, int seed, int probability, int limit_swaps) {
+CPUAlgorithm::OptimizationData CPUAlgorithm::prepareData(int num_qubits, int max_gates, int seed, double probability, int limit_swaps) {
     CircuitGenerator gen(num_qubits, seed);
     gen.generate_random(max_gates, probability);
 
@@ -155,14 +177,18 @@ CPUAlgorithm::Result CPUAlgorithm::solveSerial(const OptimizationData& data){
     int min_cost = INT_MAX;
     long long best_config = -1;
 
-    std::vector<Group> temp_groups = data.initial_groups;
+    std::vector<int> base_indices(data.initial_groups.size());
+    std::iota(base_indices.begin(), base_indices.end(), 0);
 
-    std::cout << "Start CPU Single-Core (" << num_configs << " permutacji)...\n";
+    // Wektor robocz
+    std::vector<int> temp_indices = base_indices;
+
+    std::cout << "Start CPU Single-Core Optimized (" << num_configs << " permutacji)...\n";
 
     for (long long mask = 0; mask < num_configs; ++mask) {
-        std::copy(data.initial_groups.begin(), data.initial_groups.end(), temp_groups.begin());
+        std::copy(base_indices.begin(), base_indices.end(), temp_indices.begin());
 
-        int cost = calculateCost(temp_groups, data.allowed_swaps, mask, 0);
+        int cost = calculateCost(temp_indices, data.initial_groups, data.allowed_swaps, mask, 0);
 
         if (cost < min_cost) {
             min_cost = cost;
@@ -177,19 +203,24 @@ CPUAlgorithm::Result CPUAlgorithm::solveParallel(const OptimizationData& data) {
     int global_min_cost = INT_MAX;
     long long global_best_config = -1;
 
-    std::cout << "Start CPU Multicore (" << omp_get_max_threads() << " watkow)...\n";
+    // Tworzymy bazowy wektor indeksów: [0, 1, 2, 3, ..., N]
+    std::vector<int> base_indices(data.initial_groups.size());
+    std::iota(base_indices.begin(), base_indices.end(), 0);
+
+    std::cout << "Start CPU Multicore Optimized (" << omp_get_max_threads() << " watkow)...\n";
 
 #pragma omp parallel
     {
-        std::vector<Group> thread_local_groups = data.initial_groups;
+        std::vector<int> thread_local_indices = base_indices;
+
         int local_min = INT_MAX;
         long long local_best = -1;
 
-#pragma omp for schedule(dynamic)
+#pragma omp for schedule(static)
         for (long long mask = 0; mask < num_configs; ++mask) {
-            std::copy(data.initial_groups.begin(), data.initial_groups.end(), thread_local_groups.begin());
+            std::copy(base_indices.begin(), base_indices.end(), thread_local_indices.begin());
 
-            int cost = calculateCost(thread_local_groups, data.allowed_swaps, mask, 0);
+            int cost = calculateCost(thread_local_indices, data.initial_groups, data.allowed_swaps, mask, 0);
 
             if (cost < local_min) {
                 local_min = cost;
@@ -249,13 +280,13 @@ void CPUAlgorithm::finalizeAndPrint(const OptimizationData& data, Result result)
     printWithSwaps(full_circuit, data.num_qubits);
 }
 
-void CPUAlgorithm::runSingleCore(int num_qubits, int max_gates, int seed, int probability) {
+void CPUAlgorithm::runSingleCore(int num_qubits, int max_gates, int seed, double probability) {
     OptimizationData data = prepareData(num_qubits, max_gates, seed, probability, 31);
     Result result = solveSerial(data);
     finalizeAndPrint(data, result);
 }
 
-void CPUAlgorithm::runMultiCore(int num_qubits, int max_gates, int seed, int probability) {
+void CPUAlgorithm::runMultiCore(int num_qubits, int max_gates, int seed, double probability) {
     OptimizationData data = prepareData(num_qubits, max_gates, seed, probability, 33);
     Result result = solveParallel(data);
     finalizeAndPrint(data, result);
