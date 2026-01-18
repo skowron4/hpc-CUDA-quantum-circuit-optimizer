@@ -9,6 +9,20 @@
 #include <numeric>
 #include <climits>
 
+#ifdef _MSC_VER
+#include <intrin.h>
+#endif
+
+inline int get_trailing_zeros(unsigned int mask) {
+#if defined(_MSC_VER)
+    unsigned long index;
+    _BitScanForward(&index, mask);
+    return (int)index;
+#else
+    return __builtin_ctz(mask);
+#endif
+}
+
 int CPUAlgorithm::calculateCost(
         std::vector<int>& local_indices,
         const std::vector<Group>& groups_data,
@@ -16,13 +30,19 @@ int CPUAlgorithm::calculateCost(
         long long config_mask,
         int initial_center_qubit
 ) {
-    int num_allowed_swaps = (int)allowed_swaps.size();
-    int num_groups = (int)local_indices.size();
+    size_t num_groups = local_indices.size();
+    size_t num_swaps_avail = allowed_swaps.size();
 
-    for (int i = 0; i < num_allowed_swaps; ++i) {
-        if ((config_mask >> i) & 1) {
-            int idx = allowed_swaps[i];
-            if (idx < num_groups - 1) {
+    unsigned int mask_temp = config_mask;
+
+    while (mask_temp > 0) {
+        int bit_index = get_trailing_zeros(mask_temp);
+
+        mask_temp &= (mask_temp - 1);
+
+        if (bit_index < (int)num_swaps_avail) {
+            int idx = allowed_swaps[bit_index];
+            if (idx >= 0 && idx < (int)num_groups - 1) {
                 std::swap(local_indices[idx], local_indices[idx + 1]);
             }
         }
@@ -31,7 +51,7 @@ int CPUAlgorithm::calculateCost(
     int cost = 0;
     int current_center = initial_center_qubit;
 
-    for (int i = 0; i < num_groups; ++i) {
+    for (size_t i = 0; i < num_groups; ++i) {
         const Group& current_group = groups_data[local_indices[i]];
 
         int q1 = current_group.control_two_qubit_gate;
@@ -40,21 +60,24 @@ int CPUAlgorithm::calculateCost(
         if (q1 == current_center || q2 == current_center) continue;
 
         cost++;
-        int next_target = q1;
-        bool found = false;
 
-        for (int j = i + 1; !found && j < num_groups; ++j) {
+        int next_target = q1;
+
+        for (size_t j = i + 1; j < num_groups; ++j) {
             const Group& future_group = groups_data[local_indices[j]];
             int nq1 = future_group.control_two_qubit_gate;
             int nq2 = future_group.target_two_qubit_gate;
 
-            bool u1 = (nq1 == q1 || nq2 == q1);
-            bool u2 = (nq1 == q2 || nq2 == q2);
+            bool uses_q1 = (nq1 == q1 || nq2 == q1);
+            bool uses_q2 = (nq1 == q2 || nq2 == q2);
 
-            if (u1 && !u2) { next_target = q1; found = true; }
-            else if (u2 && !u1) { next_target = q2; found = true; }
+            if (uses_q1 != uses_q2) {
+                if (uses_q1) next_target = q1;
+                else next_target = q2;
+
+                break;
+            }
         }
-
         current_center = next_target;
     }
 
