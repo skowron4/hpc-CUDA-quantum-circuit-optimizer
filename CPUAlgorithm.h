@@ -16,7 +16,7 @@ class CPUAlgorithm {
 public:
     void runSingleCore(int num_qubits, int max_gates, int seed, double probability);
     void runMultiCore(int num_qubits, int max_gates, int seed, double probability);
-private:
+
     struct OptimizationData {
         std::vector<Group> initial_groups;
         std::vector<int> allowed_swaps;
@@ -27,12 +27,15 @@ private:
         long long best_config;
         int min_cost;
     };
+    Result solveParallel(const OptimizationData& data, long long start_range, long long end_range);
+    OptimizationData prepareData(int num_qubits, int max_gates, int seed, double probability, int limit_swaps);
+    void finalizeAndPrint(const OptimizationData& data, Result result);
+
+
+private:
 
     void printWithSwaps(const std::vector<Gate>& circuit, int num_qubits);
-    OptimizationData prepareData(int num_qubits, int max_gates, int seed, double probability, int limit_swaps);
     Result solveSerial(const OptimizationData& data);
-    Result solveParallel(const OptimizationData& data);
-    void finalizeAndPrint(const OptimizationData& data, Result result);
     int determineNextCenter(const std::vector<Group>& groups, int current_center, int num_groups);
     int calculateCost(
             std::vector<int>& local_indices,

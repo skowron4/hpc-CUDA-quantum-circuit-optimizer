@@ -222,8 +222,9 @@ CPUAlgorithm::Result CPUAlgorithm::solveSerial(const OptimizationData& data){
     return { best_config, min_cost };
 }
 
-CPUAlgorithm::Result CPUAlgorithm::solveParallel(const OptimizationData& data) {
+CPUAlgorithm::Result CPUAlgorithm::solveParallel(const OptimizationData& data, long long start_range = 0, long long end_range = LONG_MAX) {
     long long num_configs = 1LL << data.allowed_swaps.size();
+    num_configs = std::min(num_configs, end_range);
     int global_min_cost = INT_MAX;
     long long global_best_config = -1;
 
@@ -241,7 +242,7 @@ CPUAlgorithm::Result CPUAlgorithm::solveParallel(const OptimizationData& data) {
         long long local_best = -1;
 
 #pragma omp for schedule(static)
-        for (long long mask = 0; mask < num_configs; ++mask) {
+        for (long long mask = start_range; mask < num_configs; ++mask) {
             std::copy(base_indices.begin(), base_indices.end(), thread_local_indices.begin());
 
             int cost = calculateCost(thread_local_indices, data.initial_groups, data.allowed_swaps, mask, 0);
