@@ -11,10 +11,10 @@ std::mutex print_mutex;
 
 int main() {
     CPUAlgorithm cpuAlgo;
-    double gpu_ratio = 0.995;
+    double gpu_ratio = 0.75;
 
     // 2. Przygotowanie danych
-    auto data = cpuAlgo.prepareData(5, 140, 1, 0.5, 40);
+    auto data = cpuAlgo.prepareData(5, 110, 24, 0.5, 40);
     long long total_configs = 1LL << data.allowed_swaps.size();
 
     // 3. OBLICZANIE PUNKTU PODZIAŁU

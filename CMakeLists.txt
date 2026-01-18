@@ -9,7 +9,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(OpenMP REQUIRED)
 find_package(CUDAToolkit REQUIRED)
 
-# --- FIX: Ręczne znajdowanie NVTX (zamiast polegać na CUDA::nvToolsExt) ---
 find_library(NVTX_LIB
         NAMES nvToolsExt64_1 nvToolsExt
         HINTS ${CMAKE_CUDA_IMPLICIT_LINK_DIRECTORIES}
@@ -33,9 +32,6 @@ set(COMMON_SOURCES
         CPUAlgorithm.h
 )
 
-# ==========================================
-# 1. Target CPU
-# ==========================================
 add_executable(run_cpu
         main2.cpp
         ${COMMON_SOURCES}
@@ -47,10 +43,6 @@ if(NVTX_LIB)
     target_link_libraries(run_cpu PRIVATE ${NVTX_LIB})
 endif()
 
-
-# ==========================================
-# 2. Target GPU
-# ==========================================
 add_executable(run_gpu
         main.cu
         ${COMMON_SOURCES}
@@ -65,10 +57,6 @@ if(NVTX_LIB)
     target_link_libraries(run_gpu PRIVATE ${NVTX_LIB})
 endif()
 
-
-# ==========================================
-# 3. Target Hybrid
-# ==========================================
 add_executable(run_hybrid
         main3.cu
         GPUKernel.cu

@@ -4,13 +4,12 @@
 #include "Group.h"
 #include <cuda_runtime.h>
 #include <algorithm>
-#include <windows.h>
 #include <fstream>
 #include <chrono>
 
 
-#define MAX_GATES 125
-#define MAX_SWAPS 63
+#define MAX_GATES 90
+#define MAX_SWAPS 45
 #define NUM_QUBITS 5
 
 
@@ -109,7 +108,7 @@ __global__ void optimizeGroupsShared(
                 int next_q1, next_q2;
                 bool uses_q1, uses_q2;
 
-                for (int j = 0; !end && j < num_group; ++j) {
+                for (int j = i + 1; !end && j < num_group; ++j) {
                     next_q1 = local_q1[j];
                     next_q2 = local_q2[j];
                     uses_q1 = (next_q1 == q1 || next_q2 == q1);
@@ -122,8 +121,9 @@ __global__ void optimizeGroupsShared(
                     if (uses_q2 && !uses_q1) {
                         next_target = q2;
                         end = true;
-                    } else current_center = q1;
+                    }
                 }
+
                 current_center = (next_target != -1) ? next_target : q1;
                 cost++;
             }
@@ -185,8 +185,8 @@ void printWithSwaps(const std::vector<Gate>& circuit, int num_qubits) {
         else if (gate.type == TWO_QUBIT) {
             int c = gate.control;
             int t = gate.target;
-            int min_q = min(c, t);
-            int max_q = max(c, t);
+            int min_q = std::min(c, t);
+            int max_q = std::max(c, t);
             bool is_swap = (gate.name == "SWAP");
 
             for (int i = 0; i < num_qubits; ++i) {
