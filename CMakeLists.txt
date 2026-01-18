@@ -45,6 +45,7 @@ endif()
 
 add_executable(run_gpu
         main.cu
+        GPUKernel.cu
         ${COMMON_SOURCES}
 )
 set_target_properties(run_gpu PROPERTIES
