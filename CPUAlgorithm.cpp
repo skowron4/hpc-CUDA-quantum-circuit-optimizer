@@ -7,6 +7,7 @@
 #include <omp.h>
 #include "CircuitGenerator.h"
 #include <numeric>
+#include <climits>
 
 int CPUAlgorithm::calculateCost(
         std::vector<int>& local_indices,
