@@ -5,7 +5,6 @@
 #include <ctime>
 
 
-// Konstruktor
 CircuitGenerator::CircuitGenerator(int qubits) : num_qubits(qubits), next_id(1) {
     rng.seed(std::time(nullptr));
 }
@@ -14,7 +13,6 @@ CircuitGenerator::CircuitGenerator(int qubits, int seed) : num_qubits(qubits), n
     rng.seed(seed);
 }
 
-// Podstawowa bramka 1-kubitowa
 void CircuitGenerator::single(int target, std::string name) {
     if (target >= num_qubits) {
         std::cerr << "[Gen Error] Qubit " << target << " poza zakresem!" << std::endl;
@@ -23,7 +21,6 @@ void CircuitGenerator::single(int target, std::string name) {
     circuit.push_back({next_id++, name, SINGLE_QUBIT, target, -1});
 }
 
-// Podstawowa bramka 2-kubitowa
 void CircuitGenerator::two(int control, int target, std::string name) {
     if (control >= num_qubits || target >= num_qubits) {
         std::cerr << "[Gen Error] Qubit poza zakresem!" << std::endl;
@@ -36,13 +33,11 @@ void CircuitGenerator::two(int control, int target, std::string name) {
     circuit.push_back({next_id++, name, TWO_QUBIT, target, control});
 }
 
-// Implementacja skrótów
 void CircuitGenerator::h(int target) { single(target, "h"); }
 void CircuitGenerator::x(int target) { single(target, "x"); }
 void CircuitGenerator::y(int target) { single(target, "y"); }
 void CircuitGenerator::cx(int control, int target) { two(control, target, "cx"); }
 
-// Implementacja generatora losowego
 void CircuitGenerator::generate_random(int target_two_qubit_count, double prob_single_qubit) {
     std::uniform_real_distribution<> dist_prob(0.0, 1.0);
     std::uniform_int_distribution<> dist_qubit(0, num_qubits - 1);
@@ -80,12 +75,10 @@ void CircuitGenerator::generate_random(int target_two_qubit_count, double prob_s
     }
 }
 
-// Pobieranie wyniku
 std::vector<Gate> CircuitGenerator::get_circuit() const {
     return circuit;
 }
 
-// Czyszczenie
 void CircuitGenerator::clear() {
     circuit.clear();
     next_id = 1;

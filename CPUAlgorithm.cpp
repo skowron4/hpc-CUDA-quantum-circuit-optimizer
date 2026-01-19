@@ -1,7 +1,3 @@
-//
-// Created by User on 16.01.2026.
-//
-
 #include "CPUAlgorithm.h"
 #include <algorithm>
 #include <omp.h>

@@ -28,20 +28,16 @@ std::ostream& operator<<(std::ostream& os, const Group& group) {
 std::vector<Group> Group::fromCircuit(const std::vector<Gate>& circuit) {
     std::vector<Group> groups;
 
-    // Bufor na bramki, które wystąpiły ZANIM dany qubit wziął udział w bramce 2-kubitowej
     std::vector<Gate> initial_buffer;
 
-    // Mapa: ID Qubita -> Indeks grupy bramek w wektorze 'groups'
     std::map<int, int> qubit_owner_group_gates;
 
     int group_counter = 0;
 
     for (const auto& gate : circuit) {
         if (gate.type == TWO_QUBIT) {
-            // 1. Tworzymy nową grupę
             Group new_group(group_counter, gate.target, gate.control); // Używamy konstruktora
 
-            // 2. Sprawdzamy bufor startowy
             std::vector<Gate> remaining_buffer;
             for (const auto& buffered_gate : initial_buffer) {
                 if (buffered_gate.target == gate.control || buffered_gate.target == gate.target) {
@@ -52,48 +48,38 @@ std::vector<Group> Group::fromCircuit(const std::vector<Gate>& circuit) {
             }
             initial_buffer = remaining_buffer; // Aktualizacja bufora
 
-            // 3. Dodajemy samą bramkę 2-kubitową
             new_group.gates.push_back(gate);
 
-            // 4. Zapisujemy grupę
             groups.push_back(new_group);
 
-            // 5. Aktualizujemy mapę właścicieli
             qubit_owner_group_gates[gate.control] = group_counter;
             qubit_owner_group_gates[gate.target]  = group_counter;
 
             group_counter++;
         }
-        else { // SINGLE_QUBIT
+        else {
             int q = gate.target;
 
-            // Sprawdzamy, czy ten qubit ma już przypisaną grupę
             if (qubit_owner_group_gates.count(q)) {
-                // TAK: Dopisujemy do istniejącej grupy
                 int owner_id = qubit_owner_group_gates[q];
 
-                // Zabezpieczenie (na wszelki wypadek, choć logika licznika powinna być spójna)
                 if (owner_id < groups.size()) {
                     groups[owner_id].gates.push_back(gate);
                 }
             } else {
-                // NIE: Qubit jeszcze nie miał bramki 2-kubitowej -> idzie do bufora
                 initial_buffer.push_back(gate);
             }
         }
     }
 
-    // --- Sprzątanie (Orphans) ---
     if (!initial_buffer.empty()) {
         if (!groups.empty()) {
-            // Doklej do ostatniej
             groups.back().gates.insert(
                 groups.back().gates.end(),
                 initial_buffer.begin(),
                 initial_buffer.end()
             );
         } else {
-            // Warstwa zerowa, jeśli brak bramek 2-kubitowych
             std::cout << "HALOOOOOOO KARTUS coś niedobrego sie dzieje" << std::endl;
             Group l(0, -1, -1);
             l.gates = initial_buffer;

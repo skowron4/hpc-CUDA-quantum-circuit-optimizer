@@ -1,7 +1,3 @@
-//
-// Created by User on 16.01.2026.
-//
-
 #ifndef OBLICZENIA_CPUALGORITHM_H
 #define OBLICZENIA_CPUALGORITHM_H
 

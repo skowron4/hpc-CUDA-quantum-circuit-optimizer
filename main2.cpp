@@ -1,7 +1,3 @@
-//
-// Created by User on 16.01.2026.
-//
-
 #include <chrono>
 #include "CPUAlgorithm.h"
 
