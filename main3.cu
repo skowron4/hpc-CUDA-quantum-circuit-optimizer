@@ -10,9 +10,9 @@ std::mutex print_mutex;
 
 int main() {
     CPUAlgorithm cpuAlgo;
-    double gpu_ratio = 0.75;
+    double gpu_ratio = 1;
 
-    auto data = cpuAlgo.prepareData(5, 110, 24, 0.5, 40);
+    auto data = cpuAlgo.prepareData(5, 160, 24, 0.5, 60);
     long long total_configs = 1LL << data.allowed_swaps.size();
 
     long long gpu_workload = (long long)(total_configs * gpu_ratio);

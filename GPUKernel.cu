@@ -5,7 +5,7 @@
 #include "CPUAlgorithm.h"
 
 // --- STREFA KONFIGURACJI ---
-#define MAX_GATES 125
+#define MAX_GATES 160
 #define MAX_SWAPS 125
 // RTX 3070 ma 46 SM. Ustawiamy bloki jako wielokrotność SM dla równego obłożenia.
 // 46 SM * 64 bloki/SM = 2944. Zwiększamy bufor, by ukryć latencję pamięci.
@@ -210,9 +210,19 @@ CPUAlgorithm::Result runGPUCalculation(const CPUAlgorithm::OptimizationData& dat
     }
 
     // Kopiowanie do symboli __constant__
-    gpuErrchk(cudaMemcpyToSymbol(c_initial_q1, h_q1.data(), num_groups * sizeof(int8_t)));
-    gpuErrchk(cudaMemcpyToSymbol(c_initial_q2, h_q2.data(), num_groups * sizeof(int8_t)));
-    gpuErrchk(cudaMemcpyToSymbol(c_allowed_swaps, h_allowed.data(), num_swaps * sizeof(int8_t)));
+    void* d_ptr_q1;
+    void* d_ptr_q2;
+    void* d_ptr_swaps;
+
+    // Pobieramy wskaźniki do pamięci __constant__ na GPU
+    gpuErrchk(cudaGetSymbolAddress(&d_ptr_q1, c_initial_q1));
+    gpuErrchk(cudaGetSymbolAddress(&d_ptr_q2, c_initial_q2));
+    gpuErrchk(cudaGetSymbolAddress(&d_ptr_swaps, c_allowed_swaps));
+
+    // Kopiujemy dane jak do zwykłego wskaźnika
+    gpuErrchk(cudaMemcpy(d_ptr_q1, h_q1.data(), num_groups * sizeof(int8_t), cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMemcpy(d_ptr_q2, h_q2.data(), num_groups * sizeof(int8_t), cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMemcpy(d_ptr_swaps, h_allowed.data(), num_swaps * sizeof(int8_t), cudaMemcpyHostToDevice));
 
     int blocks = BLOCKS_NUM;
     int threads = THREADS_PER_BLOCK;

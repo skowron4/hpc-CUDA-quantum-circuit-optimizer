@@ -27,6 +27,8 @@ public:
     OptimizationData prepareData(int num_qubits, int max_gates, int seed, double probability, int limit_swaps);
     void finalizeAndPrint(const OptimizationData& data, Result result);
 
+    Result solveDE(const OptimizationData& data, int pop_size = 100, int max_gen = 500, double F = 0.8, double CR = 0.2);
+    void runDE(int num_qubits, int max_gates, int seed, double probability, int pop_size = 100, int max_gen = 500);
 
 private:
 
