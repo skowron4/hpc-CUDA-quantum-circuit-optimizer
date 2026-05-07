@@ -10,9 +10,6 @@
 
 class CPUAlgorithm {
 public:
-    void runSingleCore(int num_qubits, int max_gates, int seed, double probability);
-    void runMultiCore(int num_qubits, int max_gates, int seed, double probability);
-
     struct OptimizationData {
         std::vector<Group> initial_groups;
         std::vector<int> allowed_swaps;
@@ -23,15 +20,31 @@ public:
         long long best_config;
         int min_cost;
     };
+
+    Result runSingleCore(int num_qubits, int max_gates, int seed, double probability);
+    Result runMultiCore(int num_qubits, int max_gates, int seed, double probability);
+
     Result solveParallel(const OptimizationData& data, long long start_range, long long end_range);
     OptimizationData prepareData(int num_qubits, int max_gates, int seed, double probability, int limit_swaps);
     void finalizeAndPrint(const OptimizationData& data, Result result);
 
-    Result solveDE(const OptimizationData& data, int pop_size = 100, int max_gen = 500, double F = 0.8, double CR = 0.2);
-    void runDE(int num_qubits, int max_gates, int seed, double probability, int pop_size = 100, int max_gen = 500);
+    Result solveDE(const OptimizationData& data,
+                   int pop_size = 100,
+                   int max_gen = 500,
+                   int cores = 1,
+                   double F = 0.8,
+                   double CR = 0.2);
+    Result runDE(int num_qubits,
+               int max_gates,
+               int seed,
+               double probability,
+               int pop_size = 100,
+               int max_gen = 500,
+               int cores = 1,
+               double F = 0.8,
+               double CR = 0.9);
 
 private:
-
     void printWithSwaps(const std::vector<Gate>& circuit, int num_qubits);
     Result solveSerial(const OptimizationData& data);
     int determineNextCenter(const std::vector<Group>& groups, int current_center, int num_groups);

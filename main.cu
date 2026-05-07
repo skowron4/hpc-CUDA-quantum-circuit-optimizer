@@ -11,7 +11,7 @@ CPUAlgorithm::Result runGPUCalculation(const CPUAlgorithm::OptimizationData& dat
 int main() {
     CPUAlgorithm cpuAlgo;
 
-    auto data = cpuAlgo.prepareData(5, 118, 24, 0.5, 40);
+    auto data = cpuAlgo.prepareData(5, 125, 24, 0.5, 40);
 
     long long total_configs = 1LL << data.allowed_swaps.size();
 
