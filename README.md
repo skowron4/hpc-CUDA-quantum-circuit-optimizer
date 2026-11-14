@@ -8,8 +8,8 @@ Quantum Circuit Transpilation Optimizer is a C++17 and CUDA C++17 combinatorial 
 ## System Architecture & Pipeline
 1. **Circuit Synthesis (`CircuitGenerator`)**: Generates a flat `std::vector<Gate>` using `std::mt19937` for a parameterized number of qubits and target `CX` gates. At each step, single-qubit gates (`h`, `x`, `y`) are emitted with probability $p$, and two-qubit `CX` gates with probability $1 - p$.
 2. **DAG Partitioning & Grouping (`Group::fromCircuit`)**: Aggregates gates into $G$ sequential `Group` structures (where $G$ equals the `CX` gate count). Each `Group` encapsulates one two-qubit `CX` gate and buffers preceding single-qubit operations acting on its target or control wires via an ownership map (`std::map<int, int>`).
-3. **Commutative Pair Extraction (`Group::getGroupPermutation`)**: Scans adjacent groups $(i, i+1)$. If their `CX` gates share no qubits, the index $i$ is appended to `allowed_swaps` and $i+1$ is skipped. Because extracted pairs are disjoint, all swap operations commute, mapping the valid reordering space to a $k$-bit integer mask ($2^k$ states, where $k = \text{allowed\_swaps.size()}$).
-4. **Search Space Exploration**: Evaluates candidate bitmasks across $[0, 2^k)$ using one of four solvers:
+3. **Commutative Pair Extraction (`Group::getGroupPermutation`)**: Scans adjacent groups $(i, i+1)$. If their `CX` gates share no qubits, the index $i$ is appended to `allowed_swaps` and $i+1$ is skipped. Because extracted pairs are disjoint, all swap operations commute, mapping the valid reordering space to a $k$-bit integer mask ($2^k$ states, where $k = \text{allowed\\_swaps.size()}$).
+4. **Search Space Exploration**: Evaluates candidate bitmasks across $[0, 2^k)$ u_sing one of four solvers:
    - `solveSerial` / `solveParallel`: Exhaustive host-side evaluation.
    - `runGPUCalculation`: Exhaustive device-side evaluation across 1,507,328 threads (`5888` blocks x `256` threads) using a grid-stride loop.
    - `run_hybrid`: Asynchronous static range partitioning (`gpu_ratio`) between host OpenMP threads and the CUDA device via `std::async(std::launch::async)`.
